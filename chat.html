@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center">
+                <i class="fas fa-hashtag me-2 text-primary"></i>
+                <h4 class="mb-0">Room: {{ code }}</h4>
+            </div>
+            <div class="d-flex align-items-center">
+                <span class="badge bg-success me-3">
+                    <i class="fas fa-circle me-1"></i>Connected
+                </span>
+                <a href="{{ url_for('dashboard') }}" class="btn btn-outline-primary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>Back
+                </a>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div id="chat-messages" class="p-4" style="height: 500px; overflow-y: auto;">
+                {% for msg in message_history %}
+                <div class="message {% if msg.user == current_user.username %}sent{% else %}received{% endif %}">
+                    <div class="d-flex align-items-center mb-1">
+                        <strong>{{ msg.user }}</strong>
+                        <span class="timestamp ms-2">{{ msg.timestamp }}</span>
+                    </div>
+                    {% if msg.image_url %}
+                    <div class="message-image mb-2">
+                        <img src="{{ msg.image_url }}" alt="Shared image" class="img-fluid rounded">
+                    </div>
+                    {% endif %}
+                    <div class="message-content">{{ msg.message }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="border-top p-3">
+                <form id="message-form" class="d-flex gap-2">
+                    <div class="position-relative flex-grow-1">
+                        <input type="text" id="message-input" class="form-control" placeholder="Type a message..." autocomplete="off">
+                        <input type="file" id="image-upload" accept="image/*" class="d-none">
+                        <button type="button" id="upload-button" class="btn btn-outline-primary position-absolute end-0 top-0" style="margin: 0.5rem 0.5rem 0.5rem 0;">
+                            <i class="fas fa-image"></i>
+                        </button>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+const socket = io();
+const chatMessages = document.getElementById('chat-messages');
+const messageForm = document.getElementById('message-form');
+const messageInput = document.getElementById('message-input');
+const imageUpload = document.getElementById('image-upload');
+const uploadButton = document.getElementById('upload-button');
+const room = '{{ code }}';
+
+// Join the chat room
+socket.emit('join', { room: room });
+
+// Handle incoming messages
+socket.on('message', function(data) {
+    addMessage(data.user, data.message, data.timestamp, data.user === '{{ current_user.username }}', data.image_url);
+});
+
+// Handle status messages
+socket.on('status', function(data) {
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'status-message';
+    statusDiv.textContent = data.msg;
+    chatMessages.appendChild(statusDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
+// Function to add a message to the chat
+function addMessage(user, message, timestamp, isSent, imageUrl) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${isSent ? 'sent' : 'received'}`;
+    
+    let messageContent = `
+        <div class="d-flex align-items-center mb-1">
+            <strong>${user}</strong>
+            <span class="timestamp ms-2">${timestamp}</span>
+        </div>
+    `;
+    
+    if (imageUrl) {
+        messageContent += `
+            <div class="message-image mb-2">
+                <img src="${imageUrl}" alt="Shared image" class="img-fluid rounded">
+            </div>
+        `;
+    }
+    
+    messageContent += `<div class="message-content">${message}</div>`;
+    
+    messageDiv.innerHTML = messageContent;
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // Add typing animation
+    messageDiv.style.opacity = '0';
+    messageDiv.style.transform = 'translateY(20px)';
+    setTimeout(() => {
+        messageDiv.style.transition = 'all 0.3s ease';
+        messageDiv.style.opacity = '1';
+        messageDiv.style.transform = 'translateY(0)';
+    }, 10);
+}
+
+// Handle image upload button click
+uploadButton.addEventListener('click', function() {
+    imageUpload.click();
+});
+
+// Handle image selection
+imageUpload.addEventListener('change', function(e) {
+    if (e.target.files.length > 0) {
+        const file = e.target.files[0];
+        if (file.size > 5 * 1024 * 1024) { // 5MB limit
+            alert('Image size should be less than 5MB');
+            return;
+        }
+        
+        const formData = new FormData();
+        formData.append('image', file);
+        formData.append('room', room);
+        
+        // Show loading state
+        uploadButton.disabled = true;
+        uploadButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        
+        fetch('/upload_image', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                socket.emit('message', {
+                    room: room,
+                    message: messageInput.value.trim(),
+                    image_url: data.image_url
+                });
+                messageInput.value = '';
+            } else {
+                alert('Failed to upload image');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Failed to upload image');
+        })
+        .finally(() => {
+            uploadButton.disabled = false;
+            uploadButton.innerHTML = '<i class="fas fa-image"></i>';
+            imageUpload.value = '';
+        });
+    }
+});
+
+// Handle form submission
+messageForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const message = messageInput.value.trim();
+    if (message) {
+        socket.emit('message', {
+            room: room,
+            message: message
+        });
+        messageInput.value = '';
+    }
+});
+
+// Handle page unload
+window.addEventListener('beforeunload', function() {
+    socket.emit('leave', { room: room });
+});
+
+// Auto-focus message input
+messageInput.focus();
+
+// Handle Enter key for sending messages
+messageInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        messageForm.dispatchEvent(new Event('submit'));
+    }
+});
+</script>
+{% endblock %} 
